@@ -1,64 +1,73 @@
 import streamlit as st
 import tempfile
-import os
 
 from chunker import load_and_chunk
 from embedder import embed_text
 from pinecone_store import ensure_index, upsert_chunks
+from retrieval import retrieve
+from llm_answer import answer
 
 st.set_page_config(layout="wide")
-st.title("📄 Legal PDF Chunk + Embedding + Pinecone Store")
+st.title("⚖️ Legal RAG System")
 
-uploaded = st.file_uploader("Upload PDF")
+# -------- INGEST --------
 
-if uploaded:
+pdf = st.file_uploader("Upload PDF")
+
+if pdf:
 
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-    tmp.write(uploaded.read())
+    tmp.write(pdf.read())
     tmp.close()
 
-    with st.spinner("Cleaning + chunking document..."):
-        chunks = load_and_chunk(tmp.name)
+    chunks = load_and_chunk(tmp.name)
+    st.success(f"Chunks: {len(chunks)}")
 
-    st.success(f"Total chunks: {len(chunks)}")
+    if st.button("Store in Pinecone"):
 
-    store_vectors = st.button("Store All Chunks In Pinecone")
+        ensure_index()
 
-    vectors = []
-
-    for idx, ch in enumerate(chunks):
-
-        chunk_id = f"{uploaded.name}_p{ch['page']}_{ch['part']}"
-
-        with st.expander(f"Chunk {idx+1} — Page {ch['page']} — Part {ch['part']}"):
-
-            st.write("Token count:", ch["tokens"])
-
-            if st.button(f"Embed #{idx}", key=f"emb{idx}"):
-                vec = embed_text(ch["text"])
-                st.write("Embedding dim:", len(vec))
-                st.write(vec[:10])
-
-            st.text_area("Chunk Text", ch["text"], height=200)
-
-        if store_vectors:
+        vecs = []
+        for ch in chunks:
+            vid = f"{pdf.name}_p{ch['page']}_{ch['part']}"
             vec = embed_text(ch["text"])
 
             meta = {
                 "page": ch["page"],
                 "part": ch["part"],
                 "tokens": ch["tokens"],
-                "source": uploaded.name,
+                "source": pdf.name,
                 "text": ch["text"]
             }
 
-            vectors.append((chunk_id, vec.tolist(), meta))
+            vecs.append((vid, vec, meta))
 
-    if store_vectors and vectors:
-        with st.spinner("Creating index if needed..."):
-            ensure_index()
+        upsert_chunks(vecs, 10)
+        st.success("Stored ✅")
 
-        with st.spinner("Upserting to Pinecone..."):
-            upsert_chunks(vectors, 10)
+# -------- ASK --------
 
-        st.success("Stored in Pinecone ✅")
+st.divider()
+q = st.text_input("Ask question")
+
+if q:
+
+    hits = retrieve(q)
+
+    st.subheader("Evidence")
+
+    for h in hits:
+        md = h["metadata"]
+        st.markdown(f"**Page {md['page']} Part {md['part']}**")
+        st.text_area("", md["text"], height=160)
+
+    ans, usage = answer(q, hits)
+
+    st.subheader("Answer")
+    st.write(ans)
+
+    st.write("Tokens:", {
+        "input": usage.prompt_tokens,
+        "output": usage.completion_tokens,
+        "total": usage.total_tokens
+    })

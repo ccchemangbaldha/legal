@@ -10,26 +10,12 @@ def clean_text(t: str) -> str:
     if not t:
         return ""
 
-    # remove long dash / underscore / star separator lines
     t = re.sub(r"[-_*]{3,}", " ", t)
-
-    # remove repeated dots
     t = re.sub(r"[.]{3,}", " ", t)
-
-    # remove weird box characters
     t = re.sub(r"[│┤┘┐┌└├┬┴┼]", " ", t)
-
-    # normalize newlines → space
     t = t.replace("\n", " ")
-
-    # collapse whitespace
     t = re.sub(r"\s+", " ", t)
-
-    # strip edges
-    t = t.strip()
-
-    # lowercase for keyword match friendliness
-    t = t.lower()
+    t = t.strip().lower()
 
     return t
 
@@ -64,10 +50,7 @@ def load_and_chunk(pdf_path: str):
         if not text:
             continue
 
-        parts = split_if_needed(text)
-
-        for part, chunk_text in parts:
-
+        for part, chunk_text in split_if_needed(text):
             chunks.append({
                 "page": i + 1,
                 "part": part,
