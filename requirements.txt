@@ -1,0 +1,9 @@
+streamlit
+openai
+pinecone-client
+elasticsearch
+transformers
+torch
+pypdf
+numpy
+python-dotenv
