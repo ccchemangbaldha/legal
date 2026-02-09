@@ -12,6 +12,10 @@ from llm_answer import answer
 st.set_page_config(layout="wide", page_title="Legal RAG Chat")
 st.title("⚖️ Legal RAG Assistant")
 
+# Initialize Thread ID (Conversation Memory)
+if "thread_id" not in st.session_state:
+    st.session_state.thread_id = None
+
 # 2. Sidebar: Document Ingestion
 with st.sidebar:
     st.header("📂 Data Ingestion")
@@ -60,7 +64,7 @@ with st.sidebar:
     st.markdown("### ℹ️ How to use")
     st.caption("1. Upload a PDF.\n2. Click 'Store in Pinecone'.\n3. Chat with your document.")
 
-# 3. Initialize Chat History
+# 3. Initialize Chat History (Visual Only)
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -84,7 +88,7 @@ for message in st.session_state.messages:
 # 5. Chat Input & Response Logic
 if query := st.chat_input("Ask a question about your legal documents..."):
     
-    # Add User Message
+    # Add User Message to Visual History
     st.session_state.messages.append({"role": "user", "content": query})
     with st.chat_message("user"):
         st.markdown(query)
@@ -93,7 +97,7 @@ if query := st.chat_input("Ask a question about your legal documents..."):
     with st.chat_message("assistant"):
         with st.spinner("Analyzing legal texts..."):
             
-            # Retrieve
+            # Retrieve Context from Pinecone
             hits = retrieve(query)
 
             if not hits:
@@ -102,8 +106,16 @@ if query := st.chat_input("Ask a question about your legal documents..."):
                 st.session_state.messages.append({"role": "assistant", "content": response})
             
             else:
-                # LLM Answer
-                ans_text, usage_obj = answer(query, hits)
+                # LLM Answer using Assistants API (Threads)
+                # We pass the existing thread_id (if any)
+                ans_text, usage_obj, new_thread_id = answer(
+                    question=query, 
+                    matches=hits, 
+                    thread_id=st.session_state.thread_id
+                )
+                
+                # Update Session State with the Thread ID (Memory)
+                st.session_state.thread_id = new_thread_id
                 
                 # Display Answer
                 st.markdown(ans_text)
@@ -119,10 +131,15 @@ if query := st.chat_input("Ask a question about your legal documents..."):
                         st.divider()
 
                 # Prepare Usage String
-                usage_str = f"Input: {usage_obj.prompt_tokens} | Output: {usage_obj.completion_tokens} | Total: {usage_obj.total_tokens}"
+                # Note: Usage object structure might differ slightly in Assistants API
+                if usage_obj:
+                    usage_str = f"Input: {usage_obj.prompt_tokens} | Output: {usage_obj.completion_tokens} | Total: {usage_obj.total_tokens}"
+                else:
+                    usage_str = "Usage data unavailable"
+                    
                 st.caption(f"📊 **Usage:** {usage_str}")
 
-                # Save to History
+                # Save to Visual History
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": ans_text,
