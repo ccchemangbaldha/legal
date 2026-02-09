@@ -1,46 +1,43 @@
+
 import streamlit as st
 import tempfile
 import time
 
 from chunker import load_and_chunk
 from embedder import embed_text
-from pinecone_store import ensure_index, upsert_chunks
-from retrieval import retrieve
+from pinecone_store import ensure_index as ensure_pinecone_index, upsert_chunks
+from elastic_store import bulk_upsert as es_bulk_upsert, ensure_index as ensure_es_index
+from retrieval_hybrid import hybrid_retrieve as retrieve
 from llm_answer import answer
 
-# 1. Page Config
 st.set_page_config(layout="wide", page_title="Legal RAG Chat")
 st.title("⚖️ Legal RAG Assistant")
 
-# Initialize Thread ID (Conversation Memory)
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = None
 
-# 2. Sidebar: Document Ingestion
 with st.sidebar:
     st.header("📂 Data Ingestion")
     st.markdown("Upload a legal PDF to knowledge base.")
-    
+
     pdf = st.file_uploader("Upload PDF", type=["pdf"])
 
     if pdf:
-        # Save temp file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(pdf.read())
             tmp_path = tmp.name
 
-        # Process chunks
         with st.spinner("Chunking PDF..."):
             chunks = load_and_chunk(tmp_path)
-        
+
         st.success(f"Ready: {len(chunks)} chunks generated.")
 
-        # Store button
-        if st.button("Store in Pinecone", type="primary"):
-            with st.spinner("Indexing data..."):
+        if st.button("Store in Vector + Keyword Index", type="primary"):
+            with st.spinner("Indexing into Pinecone + Elasticsearch..."):
                 try:
-                    ensure_index()
-                    
+                    ensure_pinecone_index()
+                    ensure_es_index()
+
                     vecs = []
                     for ch in chunks:
                         vid = f"{pdf.name}_p{ch['page']}_{ch['part']}"
@@ -55,91 +52,99 @@ with st.sidebar:
                         vecs.append((vid, vec, meta))
 
                     upsert_chunks(vecs, batch_size=20)
-                    st.toast(f"✅ Successfully stored {len(vecs)} vectors!", icon="🎉")
+
+                    es_bulk_upsert(chunks, pdf.name)
+
+                    st.toast(
+                        f"✅ Stored {len(vecs)} chunks in Pinecone + Elasticsearch!",
+                        icon="🎉"
+                    )
                     time.sleep(1)
+
                 except Exception as e:
-                    st.error(f"Error: {e}")
+                    st.error(f"Indexing Error: {e}")
 
     st.divider()
     st.markdown("### ℹ️ How to use")
-    st.caption("1. Upload a PDF.\n2. Click 'Store in Pinecone'.\n3. Chat with your document.")
+    st.caption(
+        "1. Upload a PDF.\n"
+        "2. Click 'Store in Vector + Keyword Index'.\n"
+        "3. Ask legal questions (Articles, Rules, Roles, etc.)."
+    )
 
-# 3. Initialize Chat History (Visual Only)
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# 4. Display Chat History
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-        
-        # Display Evidence if available
+
         if "evidence" in message:
             with st.expander("🔍 View Retrieved Evidence"):
                 for item in message["evidence"]:
                     st.markdown(f"**Page {item['page']}**")
                     st.caption(item["text"])
                     st.divider()
-        
-        # Display Token Usage if available
+
         if "usage" in message:
             st.caption(f"📊 **Usage:** {message['usage']}")
 
-# 5. Chat Input & Response Logic
 if query := st.chat_input("Ask a question about your legal documents..."):
-    
-    # Add User Message to Visual History
+
     st.session_state.messages.append({"role": "user", "content": query})
     with st.chat_message("user"):
         st.markdown(query)
 
-    # Generate Assistant Response
     with st.chat_message("assistant"):
-        with st.spinner("Analyzing legal texts..."):
-            
-            # Retrieve Context from Pinecone
+        with st.spinner("Running hybrid legal retrieval..."):
+
             hits = retrieve(query)
 
             if not hits:
-                response = "I couldn't find any relevant information. Please ensure you have uploaded and stored a document in the sidebar."
+                response = (
+                    "No relevant chunks found. Make sure the document is indexed "
+                    "and Elasticsearch + Pinecone are configured correctly."
+                )
                 st.warning(response)
-                st.session_state.messages.append({"role": "assistant", "content": response})
-            
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": response
+                })
+
             else:
-                # LLM Answer using Assistants API (Threads)
-                # We pass the existing thread_id (if any)
                 ans_text, usage_obj, new_thread_id = answer(
-                    question=query, 
-                    matches=hits, 
+                    question=query,
+                    matches=hits,
                     thread_id=st.session_state.thread_id
                 )
-                
-                # Update Session State with the Thread ID (Memory)
+
                 st.session_state.thread_id = new_thread_id
-                
-                # Display Answer
+
                 st.markdown(ans_text)
 
-                # Prepare Evidence Data for History
                 evidence_data = []
                 with st.expander("🔍 View Retrieved Evidence"):
                     for h in hits:
                         md = h["metadata"]
-                        evidence_data.append({"page": md["page"], "text": md["text"]})
-                        st.markdown(f"**Page {md['page']}**")
-                        st.caption(f"{md['text'][:300]}...") # Show snippet
+                        evidence_data.append({
+                            "page": md.get("page"),
+                            "text": md.get("text")
+                        })
+                        st.markdown(f"**Page {md.get('page')}**")
+                        st.caption(f"{md.get('text','')[:300]}...")
                         st.divider()
 
-                # Prepare Usage String
-                # Note: Usage object structure might differ slightly in Assistants API
                 if usage_obj:
-                    usage_str = f"Input: {usage_obj.prompt_tokens} | Output: {usage_obj.completion_tokens} | Total: {usage_obj.total_tokens}"
+                    usage_str = (
+                        f"Input: {usage_obj.prompt_tokens} | "
+                        f"Output: {usage_obj.completion_tokens} | "
+                        f"Total: {usage_obj.total_tokens}"
+                    )
                 else:
                     usage_str = "Usage data unavailable"
-                    
+
                 st.caption(f"📊 **Usage:** {usage_str}")
 
-                # Save to Visual History
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": ans_text,
