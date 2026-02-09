@@ -19,7 +19,6 @@ def embed_text(text: str):
     emb = out.last_hidden_state.mean(dim=1).squeeze()
     emb = emb / emb.norm()
 
-    # ✅ critical: convert to python list
     return emb.cpu().numpy().astype(float).tolist()
 
 
