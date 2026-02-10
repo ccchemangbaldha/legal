@@ -4,7 +4,7 @@ from pypdf import PdfReader
 from embedder import token_len
 
 # KEEPING SKIP_PAGES LOW to ensure we get Article 13 etc.
-SKIP_PAGES = 1
+SKIP_PAGES = 0
 TOKEN_LIMIT = 450
 
 def clean_text(t: str) -> str:
