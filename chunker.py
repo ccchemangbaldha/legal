@@ -1,9 +1,10 @@
 import re
+import os
 from pypdf import PdfReader
 from embedder import token_len
 
 # KEEPING SKIP_PAGES LOW to ensure we get Article 13 etc.
-SKIP_PAGES = 30
+SKIP_PAGES = 1
 TOKEN_LIMIT = 450
 
 def clean_text(t: str) -> str:
@@ -48,30 +49,57 @@ def split_text_sliding_window(text: str, chunk_size_words=300, overlap_words=50)
         
     return chunks
 
-def load_and_chunk(pdf_path: str):
-    reader = PdfReader(pdf_path)
+def load_and_chunk(file_path: str):
+    """
+    Detects file type based on extension and chunks accordingly.
+    Supports .pdf, .txt, .log
+    """
+    _, ext = os.path.splitext(file_path)
+    ext = ext.lower()
+    
     chunks = []
 
-    for i, page in enumerate(reader.pages):
-        if i < SKIP_PAGES:
-            continue
+    if ext == ".pdf":
+        reader = PdfReader(file_path)
+        for i, page in enumerate(reader.pages):
+            if i < SKIP_PAGES:
+                continue
 
-        raw = page.extract_text() or ""
+            raw = page.extract_text() or ""
+            text = clean_text(raw)
+
+            if not text:
+                continue
+
+            batch_chunks = split_text_sliding_window(text, chunk_size_words=300, overlap_words=50)
+
+            for idx, chunk_text in enumerate(batch_chunks):
+                chunks.append({
+                    "page": i + 1,
+                    "part": f"batch_{idx}",
+                    "text": chunk_text,
+                    "tokens": token_len(chunk_text)
+                })
+
+    elif ext in [".txt", ".log"]:
+        # Text based files
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                raw = f.read()
+        except Exception as e:
+            print(f"Error reading text file: {e}")
+            return []
+
         text = clean_text(raw)
-
-        if not text:
-            continue
-
-        # Use the new iterative batch splitter
-        # 300 words is usually safe for a 450 token limit
-        batch_chunks = split_text_sliding_window(text, chunk_size_words=300, overlap_words=50)
-
-        for idx, chunk_text in enumerate(batch_chunks):
-            chunks.append({
-                "page": i + 1,
-                "part": f"batch_{idx}",
-                "text": chunk_text,
-                "tokens": token_len(chunk_text)
-            })
+        if text:
+            batch_chunks = split_text_sliding_window(text, chunk_size_words=300, overlap_words=50)
+            
+            for idx, chunk_text in enumerate(batch_chunks):
+                chunks.append({
+                    "page": 1, # Treat entire text file as page 1
+                    "part": f"batch_{idx}",
+                    "text": chunk_text,
+                    "tokens": token_len(chunk_text)
+                })
 
     return chunks

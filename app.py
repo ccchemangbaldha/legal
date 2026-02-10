@@ -1,7 +1,7 @@
-
 import streamlit as st
 import tempfile
 import time
+import os
 
 from chunker import load_and_chunk
 from embedder import embed_text
@@ -18,16 +18,21 @@ if "thread_id" not in st.session_state:
 
 with st.sidebar:
     st.header("📂 Data Ingestion")
-    st.markdown("Upload a legal PDF to knowledge base.")
+    st.markdown("Upload a document (PDF, TXT, LOG) to knowledge base.")
 
-    pdf = st.file_uploader("Upload PDF", type=["pdf"])
+    # Changed type to include txt and log
+    uploaded_file = st.file_uploader("Upload Document", type=["pdf", "txt", "log"])
 
-    if pdf:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            tmp.write(pdf.read())
+    if uploaded_file:
+        # Determine the file extension to save correctly
+        file_ext = os.path.splitext(uploaded_file.name)[1]
+        
+        # Save with the correct extension so chunker knows how to handle it
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
+            tmp.write(uploaded_file.read())
             tmp_path = tmp.name
 
-        with st.spinner("Chunking PDF..."):
+        with st.spinner(f"Chunking {file_ext} file..."):
             chunks = load_and_chunk(tmp_path)
 
         st.success(f"Ready: {len(chunks)} chunks generated.")
@@ -40,20 +45,21 @@ with st.sidebar:
 
                     vecs = []
                     for ch in chunks:
-                        vid = f"{pdf.name}_p{ch['page']}_{ch['part']}"
+                        # Updated ID generation to use uploaded_file.name
+                        vid = f"{uploaded_file.name}_p{ch['page']}_{ch['part']}"
                         vec = embed_text(ch["text"])
                         meta = {
                             "page": ch["page"],
                             "part": ch["part"],
                             "tokens": ch["tokens"],
-                            "source": pdf.name,
+                            "source": uploaded_file.name,
                             "text": ch["text"]
                         }
                         vecs.append((vid, vec, meta))
 
                     upsert_chunks(vecs, batch_size=20)
 
-                    es_bulk_upsert(chunks, pdf.name)
+                    es_bulk_upsert(chunks, uploaded_file.name)
 
                     st.toast(
                         f"✅ Stored {len(vecs)} chunks in Pinecone + Elasticsearch!",
@@ -67,7 +73,7 @@ with st.sidebar:
     st.divider()
     st.markdown("### ℹ️ How to use")
     st.caption(
-        "1. Upload a PDF.\n"
+        "1. Upload a Document.\n"
         "2. Click 'Store in Vector + Keyword Index'.\n"
         "3. Ask legal questions (Articles, Rules, Roles, etc.)."
     )
